@@ -83,11 +83,7 @@ sniper_init()
       blue "Enter a valid response";
     fi
   done
-  
-  #sniper_sudo
-  #sniper_history_init
-  #sniper_variable "$(sniper_installed)"
-  #sniper_repo_init
+ 
   shouldloop=true;
 }
 
