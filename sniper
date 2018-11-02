@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Version: 0.2
+# Version: 0.3
 
-#URL="http://download.tumbleweed.boombatower.com"
-URL="http://download.opensuse.org/history"
+URL="https://download.opensuse.org/history"
 CONFIG_DIR="/etc/zypp"
 VARS_DIR="$CONFIG_DIR/vars.d"
 VAR_NAME="snapshotVersion"
@@ -10,16 +9,21 @@ VAR_FILE="$VARS_DIR/$VAR_NAME"
 TRACE="$VARS_DIR/.snapshotVersion.trace"
 SCORE_URL="http://review.tumbleweed.boombatower.com/data/score.yaml"
 SCORE="$VARS_DIR/score.yaml"
+SCORE_FILTER=$(cat /etc/zypp/vars.d/score.yaml | cut -d "'" -f 2)
 DEFAULT="$VARS_DIR/snapshotDefault"
+BLOCK="$VARS_DIR/snapshotLock"
 
 	if [ ! -f $DEFAULT ]; then
 		touch $DEFAULT
 	fi
 
 	curl --silent -o $VARS_DIR/score.yaml $SCORE_URL
+	cat $SCORE | cut -d "'" -f 2 > $SCORE.tmp
+	rm $SCORE
+	mv $SCORE.tmp $SCORE
 
 REPOS_DIR="/etc/zypp/repos.d"
-REPO_PATTERN="http://download.opensuse.org/history/[^$]+"
+REPO_PATTERN="http://download.opensuse.org/tumbleweed/[^$]+"
 RED="\e[91m"
 GREEN="\e[92m"
 BLUE="\e[94m"
@@ -37,7 +41,7 @@ sniper_sudo()
 	fi
 }
 
-sniper_inited()
+sniper_started()
 {
 	if [ -f "$VAR_FILE" ] ; then
 		return 0
@@ -45,154 +49,162 @@ sniper_inited()
 	return 1
 }
 
-sniper_init()
+sniper_start()
 {
-  sniper_sudo
-  sniper_trace_init
-  sniper_variable "$(sniper_installed)"
-  sniper_repo_init
-  sniper_options
+sniper_sudo
+sniper_trace_init
+sniper_variable "$(sniper_installed)"
+sniper_repo_init
+sniper_options
 }
 
 sniper_options()
 {
 	while $shouldloop; do
 		sniper_table
-    echo ""
-    echo -ne "$1 ${BLUE}(S)table: | (T)esting | (L)atest? (${RESET}${BLINK}S${RESET}${BLUE}):${RESET} "
-    local response
-    read response
+		echo ""
+		echo -ne "$1 ${BLUE}(S)table: | (T)esting | (L)atest? (${RESET}${BLINK}S${RESET}${BLUE}):${RESET} "
+		local response
+		read response
 
-    if [ "$response" = "" ] || [ "$response" = "stable" ] || [ "$response" = "S" ] || [ "$response" = "s" ] ; then
+		if [ "$response" = "" ] || [ "$response" = "stable" ] || [ "$response" = "S" ] || [ "$response" = "s" ] ; then
 			local version="stable"
 			shouldloop=false;
-    elif [ "$response" = "testing" ] || [ "$response" = "T" ] || [ "$response" = "t" ] ; then
-			local version="testing"
-			shouldloop=false;
-    elif [ "$response" = "latest" ] || [ "$response" = "L" ] || [ "$response" = "l" ] ; then
-      local version="latest"
-      shouldloop=false;
-    else
-      echo "${RED}Enter a valid response${RESET}";
-    fi
-  done
-  sniper_target $version
-  shouldloop=true;
+    			elif [ "$response" = "testing" ] || [ "$response" = "T" ] || [ "$response" = "t" ] ; then
+				local version="testing"
+				shouldloop=false;
+    			elif [ "$response" = "latest" ] || [ "$response" = "L" ] || [ "$response" = "l" ] ; then
+      				local version="latest"
+      				shouldloop=false;
+    			else
+      				echo "${RED}Enter a valid response${RESET}";
+    		fi
+	done
+sniper_target $version
+shouldloop=true;
 }
 
 sniper_variable()
 {
-  if [ $# -eq 1 ] ; then
-    local version="$1"
-    echo -e "$version" | sudo tee "$VAR_FILE" > /dev/null
-    if [ $? -ne 0 ] ; then
-      echo -e "${RED}Failed to set version to${RESET} $version ${RED}in $VARS_DIR/$VAR_NAME${RESET}"
-      exit 1
-    fi
-  fi
+	if [ $# -eq 1 ] ; then
+		local version="$1"
+		echo -e "$version" | sudo tee "$VAR_FILE" > /dev/null
+		if [ $? -ne 0 ] ; then
+			echo -e "${RED}Failed to set version to${RESET} $version ${RED}in $VARS_DIR/$VAR_NAME${RESET}"
+			exit 1
+    		fi
+  	fi
 }
 
 sniper_repo_init()
 {
-  if [ ! -d "$REPOS_DIR/.previous" ] ; then
-    sudo mkdir "$REPOS_DIR/.previous"
-  fi
+	if [ ! -d "$REPOS_DIR/.previous" ] ; then
+		sudo mkdir "$REPOS_DIR/.previous"
+	fi
 
-  local IFS=$'\n'
-  local files=($(grep -lP "$REPO_PATTERN" "$REPOS_DIR"/*))
-  local file
-		for file in ${files[@]} ; do
-			echo -e "${BLUE}Backup $file${RESET}"
-			sudo cp --backup=numbered "$file" "$REPOS_DIR/.previous/$(basename "$file")"
-			sudo sed -i -r 's|(name=.*)|\1 ($snapshotVersion)|' "$file"
-			sudo sed -i -r 's|(baseurl=).*tumbleweed/(.*)|\1'$URL'/$snapshotVersion/tumbleweed/\2|' "$file"
-		done
+local IFS=$'\n' # Handle repo files with space in name. :(
+local files=($(grep -lP "$REPO_PATTERN" "$REPOS_DIR"/*))
+local file
+	for file in ${files[@]} ; do
+		echo "backup $file"
+		sudo cp --backup=numbered "$file" "$REPOS_DIR/.previous/$(basename "$file")"
+		sudo sed -i -r 's|(name=.*)|\1 ($snapshotVersion)|' "$file"
+		sudo sed -i -r 's|(baseurl=).*tumbleweed/(.*)|\1'$URL'/$snapshotVersion/tumbleweed/\2|' "$file"
+	done
 }
 
 sniper_trace_init()
 {
-  if [ ! -f "$TRACE" ] ; then
-    echo | sudo tee "$TRACE" > /dev/null
-  fi
+	if [ ! -f "$TRACE" ] ; then
+		echo | sudo tee "$TRACE" > /dev/null
+	fi
 }
 
 sniper_trace()
 {
-  if [ $# -eq 1 ] ; then
-    if [ "$(head -n1 "$TRACE" | cut -c -8)" != "$1" ] ; then
-      sudo sed -i "1i$1" "$TRACE"
-    fi
-  else
-
-	TRACE_ECHO=$(grep -v -e '^$' "$TRACE")
+	if [ $# -eq 1 ] ; then
+		if [ "$(head -n1 "$TRACE" | cut -c -8)" != "$1" ] ; then
+			sudo sed -i "1i$1" "$TRACE"
+		fi
+	else
+		TRACE_ECHO=$(grep -v -e '^$' "$TRACE")
 		while read -r LINE; do
-			echo -e "${BLUE}$LINE${RESET} "
+		echo -e "${BLUE}$LINE${RESET} "
 		done <<< $TRACE_ECHO | head -n 20 | awk '{printf("%02d- %s\n", NR, $0)}' | column
 	fi
 }
 
-sniper_rectified()
-{
-	SNAP_TRACE=$(grep -v -e '^$' "$TRACE")
-	while read -r LINE; do
-	LIST=$(echo "$LINE" | cut -d " " -f 1)
-	RATE=$(cat score.yaml | grep -A 4 "$LIST" | tail -n 3 | head -n 1 | cut -d " " -f 4)
-
-	echo -e "${BLUE}$LINE ${RESET}" | sed -e "s/pending/$RATE/g" > $TRACE.bak
-	cp $TRACE.bak $TRACE
-	rm $TRACE.bak
-done <<< $SNAP_TRACE
-}
-
-sniper_rating()
-{
-	cat $SCORE | grep -A 2 -w "$1" | tail -n 1 | cut -d " " -f 4
-}
-
 sniper_trace_pop()
 {
-  if [ $# -eq 1 ] ; then
-    sudo sed -i "1,$[$var-1] d" "$TRACE" | cut -c -8
-  else
-    head -n$var "$TRACE" | tail -n1 | cut -c -8
-  fi
+	if [ $# -eq 1 ] ; then
+		sudo sed -i "1,$[$var-1] d" "$TRACE" | cut -c -8
+	else
+		head -n$var "$TRACE" | tail -n1 | cut -c -8
+	fi
 }
+
+sniper_lock()
+{
+	if [ ! -f $LOCK ]; then
+		touch $LOCK
+		echo "---LOCK---"
+	fi
+
+old_lock=$(cat $BLOCK | grep "$1")
+
+	if [ "$1" == "$old_lock" ]; then
+		echo -e "${RED}Snapshot already locked!${RESET}"
+	else
+		echo "$1" >> $BLOCK
+	fi
+}
+
+sniper_unlock()
+{
+	old_lock=$(cat $BLOCK | grep "$1")
+
+	if [ "$1" == "$old_lock" ]; then
+		sed -i /$1/d $BLOCK
+	else
+		echo -e "${RED}Snapshot isn't locked!${RESET}"
+	fi
+}	
 
 sniper_report()
 {
-  if [ "$(sniper_installed)" == "$(sniper_default)" ] ; then
-    echo ""
-    echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
-    echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Target   : ${GREEN}$(cat $DEFAULT)${RESET}"
-    echo -e "${CYAN}  X:           .:X         :X  ${RESET} ${BLUE}|${RESET} Installed: ${GREEN}$(sniper_installed)${RESET} ${BLUE}|${RESET}"
-    echo -e "${CYAN}  X:         :.X           :X  ${RESET} ${BLUE}|${RESET} Latest   : ${GREEN}$(sniper_default)${RESET} ${BLUE}|${RESET}"
-    echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Score    :${GREEN}$(sniper_score)${RESET}"
-    echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
-  else
-    echo ""
-    echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
-    echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Target   : ${GREEN}$(cat $DEFAULT)${RESET}"
-    echo -e "${CYAN}  X:           .:X         :X  ${RESET} ${BLUE}|${RESET} Installed: ${RED}$(sniper_installed)${RESET} ${BLUE}|${RESET}"
-    echo -e "${CYAN}  X:         :.X           :X  ${RESET} ${BLUE}|${RESET} Latest   : ${GREEN}$(sniper_default)${RESET} ${BLUE}|${RESET}"
-    echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Score    :${GREEN}$(sniper_score)${RESET}"
-    echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
-  fi
-    DAY=$(sniper_default | cut -c7-)
-    MONTH=$(sniper_default | cut -c 5- | cut -c -2)
-    YEAR=$(sniper_default | cut -c -4)
-    echo ""
-    echo "  For more information about the new snapshot go:"
-    echo -e "  ${BLUE} http://review.tumbleweed.boombatower.com/$YEAR/$MONTH/$DAY/release.html${RESET}"
-    echo -e ""
+	if [ "$(sniper_installed)" == "$(sniper_default)" ] ; then
+		echo ""
+		echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
+		echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Target   : ${GREEN}$(cat $DEFAULT)${RESET}"
+		echo -e "${CYAN}  X:           .:X         :X  ${RESET} ${BLUE}|${RESET} Installed: ${GREEN}$(sniper_installed)${RESET} ${BLUE}|${RESET}"
+		echo -e "${CYAN}  X:         :.X           :X  ${RESET} ${BLUE}|${RESET} Latest   : ${GREEN}$(sniper_default)${RESET} ${BLUE}|${RESET}"
+		echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Score    :${GREEN}$(sniper_score)${RESET}"
+		echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
+	else
+		echo ""
+		echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
+		echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Target   : ${GREEN}$(cat $DEFAULT)${RESET}"
+		echo -e "${CYAN}  X:           .:X         :X  ${RESET} ${BLUE}|${RESET} Installed: ${RED}$(sniper_installed)${RESET} ${BLUE}|${RESET}"
+		echo -e "${CYAN}  X:         :.X           :X  ${RESET} ${BLUE}|${RESET} Latest   : ${GREEN}$(sniper_default)${RESET} ${BLUE}|${RESET}"
+		echo -e "${CYAN}   XX      X0.   .0X      XX   ${RESET}   Score    :${GREEN}$(sniper_score)${RESET}"
+		echo -e "${CYAN}     X0:0X          X0:0X      ${RESET} ${BLUE} ----------------------${RESET}"
+	fi
+DAY=$(sniper_default | cut -c7-)
+MONTH=$(sniper_default | cut -c 5- | cut -c -2)
+YEAR=$(sniper_default | cut -c -4)
+	echo ""
+	echo "  For more information about the new snapshot go:"
+	echo -e "  ${BLUE} http://review.tumbleweed.boombatower.com/$YEAR/$MONTH/$DAY/release.html${RESET}"
+	echo -e ""
 }
 
 sniper_table()
 {
-		echo ""
-    echo "			    LAST SNAPSHOTS TABLE SCORE"
-    echo -e " ${BLUE} -------------------------------${RESET}"
-		echo -e " ${BLUE}|${RESET} Stable branch :${GREEN}$(sniper_stable_score) ${BLUE}[${GREEN}$(sniper_branch_stable)${BLUE}] |${RESET}"
-		echo -e " ${BLUE}|${RESET} Testing branch:${GREEN}$(sniper_testing_score) ${BLUE}[${GREEN}$(sniper_branch_testing)${BLUE}] |${RESET}"
+	echo ""
+	echo "     LAST SNAPSHOTS TABLE SCORE"
+	echo -e " ${BLUE} -------------------------------${RESET}"
+	echo -e " ${BLUE}|${RESET} Stable branch :${GREEN}$(sniper_stable_score) ${BLUE}[${GREEN}$(sniper_branch_stable)${BLUE}] |${RESET}"
+	echo -e " ${BLUE}|${RESET} Testing branch:${GREEN}$(sniper_testing_score) ${BLUE}[${GREEN}$(sniper_branch_testing)${BLUE}] |${RESET}"
 		if [ "$(sniper_latest_score)" -ge "90" ] ; then
 			echo -e " ${BLUE}|${RESET} Latest branch :${GREEN}$(sniper_latest_score) ${BLUE}[${GREEN}$(sniper_branch_latest)${BLUE}] |${RESET}"
 		fi
@@ -202,69 +214,80 @@ sniper_table()
 		if [ "$(sniper_latest_score)" -lt "70" ] ; then
 			echo -e " ${BLUE}|${RESET}${RED} Latest branch :$(sniper_latest_score) [$(sniper_branch_latest)] ${BLUE}|${RESET}"
 		fi
-		echo -e "  ${BLUE}-------------------------------${RESET}"
+	echo -e "  ${BLUE}-------------------------------${RESET}"
 }
 
 sniper_branch_stable()
 {
-	cat $SCORE | grep -B 2 -w "stable" | tail -n 3 | grep "'" | cut -d "'" -f 2
+	awk 'NR==FNR{a[$0];next} !($1 in a)' $BLOCK $SCORE | grep -B 2 -w "stable" | grep "2" | tail -n 1
+}
+
+filter_testing()
+{
+	awk 'NR==FNR{a[$0];next} !($0 in a)' $BLOCK $SCORE | grep -B 2 -w "pending" | grep "2" | tail -n 1
 }
 
 sniper_branch_testing()
 {
-  cat $SCORE |
-  grep -B 50 -w "pending" |
-  sed -n '/unstable/{s/.*//;x;d;};x;p;${x;p;}' |
-  sed '/^$/d' | sed -n '/moderate/{s/.*//;x;d;};x;p;${x;p;}' |
-  sed '/^$/d' | tail -n 3 | head -n 1 | cut -d "'" -f 2
+	if [ "$(filter_testing_score)" -lt "91" ] ; then
+		echo "$(sniper_branch_stable)"
+	else
+		echo "$(filter_testing)"
+	fi	
 }
 
 sniper_branch_latest()
 {
-  cat $SCORE | tail -n 3 | grep "'" | cut -d "'" -f 2
+	awk 'NR==FNR{a[$0];next} !($1 in a)' $BLOCK $SCORE | grep "2" | tail -n 1
 }
 
 sniper_default()
 {
-  if grep -q stable $DEFAULT; then
-    sniper_branch_stable
-  fi
-  if grep -q testing $DEFAULT; then
-     sniper_branch_testing
-  fi
-  if grep -q latest $DEFAULT; then
-     sniper_branch_latest
-  fi
+	if grep -q stable $DEFAULT; then
+		sniper_branch_stable
+	fi
+	if grep -q testing $DEFAULT; then
+		sniper_branch_testing
+	fi
+	if grep -q latest $DEFAULT; then
+		sniper_branch_latest
+	fi
 }
 
 sniper_stable_score()
 {
-	cat $SCORE | grep -B 2 -w "stable" | tail -n 2 | head -n 1 | cut -d ":" -f 2
+	cat $SCORE | grep -A 1 -w "$(sniper_branch_stable)" | tail -n 1 | cut -d ":" -f 2
+}
+
+filter_testing_score()
+{
+	cat $SCORE | grep -A 1 -w "$(sniper_branch_testing)" | tail -n 1 | cut -d ":" -f 2
 }
 
 sniper_testing_score()
 {
-  cat $SCORE | grep -B 50 -w "pending" |
-  sed -n '/unstable/{s/.*//;x;d;};x;p;${x;p;}' |
-  sed '/^$/d' | sed -n '/moderate/{s/.*//;x;d;};x;p;${x;p;}' |
-  sed '/^$/d' | tail -n 2 | head -n 1 | cut -d ":" -f 2
+	if [ "$(filter_testing_score)" -lt "91" ]; then
+		echo "$(sniper_stable_score)"
+	else
+		echo "$(filter_testing_score)"
+	fi
 }
 
 sniper_latest_score()
 {
-	cat $SCORE | tail -n 2 | head -n 1 | cut -d ":" -f 2
+	cat $SCORE | grep -A 1 -w "$(sniper_branch_latest)" | tail -n 1 | cut -d ":" -f 2
 }
 
 sniper_score()
 {
 	if grep -q stable $DEFAULT; then
-	sniper_stable_score
+		sniper_stable_score
 	fi
 	if grep -q testing $DEFAULT; then
-	sniper_testing_score
+		sniper_testing_score
 	fi
 	if grep -q latest $DEFAULT; then
-	sniper_latest_score
+		sniper_latest_score
 	fi
 }
 
@@ -274,33 +297,33 @@ sniper_update()
 		sniper_prompt "${GREEN}Update from${RESET}${RED} $(sniper_installed)${RESET}${GREEN} to $(sniper_default)?${RESET}"
 		sniper_sudo
 		sniper_variable $(sniper_default)
-		sniper_install $(sniper_default)
+		sniper_dup $(sniper_default)
 			if (( $? )); then
 				sniper_variable $(sniper_installed)
 				exit 1
 			else
-				sniper_trace "$(sniper_installed) $(date +"(%a, %b %d %Y - %H:%M)") [$(sniper_rating sniper_default)])"
+				sniper_trace "$(sniper_installed) $(date +"(%a, %b %d %Y - %H:%M)")"
 				sniper_variable "$(sniper_installed)"
 			fi
 	else
 		echo -e "${GREEN}Already at the most recent snapshot!${RESET}"
 		exit 1
 
-  fi
+	fi
 }
 
 sniper_installed()
 {
-  cat /etc/os-release | grep -oP "VERSION_ID=\"\K(\d+)"
+	cat /etc/os-release | grep -oP "VERSION_ID=\"\K(\d+)"
 }
 
 sniper_list()
 {
 	LIST=$(cat $SCORE | grep "'" | cut -d "'" -f 2 | tail -n 30 | tac)
 
-  while read -r LINE; do
-	SCORE_LIST=$(cat $SCORE | grep -A 2 "$LINE" | head -n 2 | tail -n 1)
-    echo -e "${BLUE}$LINE${RESET}:$SCORE_LIST"
+	while read -r LINE; do
+		SCORE_LIST=$(cat $SCORE | grep -A 2 "$LINE" | head -n 2 | tail -n 1)
+		echo -e "${BLUE}$LINE${RESET}:$SCORE_LIST"
 	done <<< $LIST | head -n 30 | awk '{printf("%2d- %s\n", NR, $0)}'
 }
 
@@ -311,85 +334,95 @@ sniper_list_filter()
 
 sniper_prompt()
 {
-  echo -ne "$1 ${BLUE}[y/n] (${RESET}y${BLUE}):${RESET} "
-  local response
-  read response
-  if [ "$response" != "" ] && [ "$response" != "y" ] ; then
-    echo -e "${RED}Exiting${RESET}"
-    exit 1
-  fi
+	echo -ne "$1 ${BLUE}[y/n] (${RESET}y${BLUE}):${RESET} "
+	local response
+	read response
+	if [ "$response" != "" ] && [ "$response" != "y" ] ; then
+		echo -e "${RED}Exiting${RESET}"
+		exit 1
+	fi
 }
 
 sniper_target()
 {
-	local version="$1"
-  if [ $# -eq 1 ] && [ "$1" != "stable" ] && [ "$1" != "testing" ] && [ "$1" != "latest" ]; then
+local version="$1"
+	if [ $# -eq 1 ] && [ "$1" != "stable" ] && [ "$1" != "testing" ] && [ "$1" != "latest" ]; then
 		if ! sniper_list_filter | grep -Fx "$version" > /dev/null ; then
-      echo -e "${RED}Invalid version ${RESET}${BLUE}$version${RESET}${RED}, not in available list${RESET}"
-      return
-    fi
-  fi
+			echo -e "${RED}Invalid version ${RESET}${BLUE}$version${RESET}${RED}, not in available list${RESET}"
+			return
+		fi
+	fi
 
 	if [ "$version" == "$(cat $DEFAULT)" ] && [ "$version" != "$(cat $VAR_FILE)" ] && [ "$force" != "1" ] ; then # Em principio o VAR_FILE neste caso é obsoleto (list)
 		if [ "$(sniper_installed)" != "$(sniper_default)" ] ; then
 			echo -e "${GREEN}Already at the ${BLUE}$version${RESET}${GREEN} branch...${RESET}"
-      exit 1
+			exit 1
 		else
 			echo -e "${GREEN}Already at the recent ${BLUE}$version${RESET}${GREEN} snapshot.${RESET}"
 			exit 1
 		fi
 	fi
 
-	if [ "$version" != "$(cat $DEFAULT)" ] && [ "$version" == "$(cat $VAR_FILE)" ] ; then
-		echo -e "${GREEN}Already at the ${BLUE}$version${RESET}${GREEN} snapshot.${RESET}"
-    exit 1
-  fi
-
 	if [ "$version" == "stable" ] || [ "$version" == "testing" ] || [ "$version" == "latest" ] ; then
 		sniper_prompt "${BLUE}Update from${RESET} ${RED}$(sniper_installed)${RESET}${BLUE} to ${RESET}${GREEN}$(sniper_branch_$version)?${RESET}"
 		sniper_sudo
 		sniper_variable $(sniper_branch_$version)
-		sniper_install $(sniper_branch_$version)
+		sniper_dup $(sniper_branch_$version)
 			if (( $? )); then
 				sniper_variable $(sniper_installed)
 				exit 1
 			else
 				echo "$version" > $DEFAULT
-				sniper_trace "$(sniper_installed) $(date +"(%a, %b %d %Y - %H:%M)") [$(sniper_rating $(sniper_branch_$version))]"
+				sniper_trace "$(sniper_installed) $(date +"(%a, %b %d %Y - %H:%M)")"
 				sniper_variable "$(sniper_installed)"
 				exit 1
 			fi
 	fi
-
-
-#	if [ "$version" != "$(sniper_installed)" ] && [ "$version" != "stable" ] && [ "$version" != "testing" ] && [ "$version" != "latest" ] && [ "$version" != "$(cat $VAR_FILE)" ] ; then
-#		sniper_prompt "${RED}Update from${RESET} ${RED}$(sniper_installed)${RESET} ${BLUE} to ${RESET}${GREEN}$version?${RESET}"
-#		sniper_sudo
-#		sniper_variable $version
-#		sniper_install $version
-#			if (( $? )); then
-#				sniper_variable $(sniper_installed)
-#				exit 1
-#			else
-#				sniper_trace "$(sniper_installed) $(date +"(%a, %b %d %Y - %H:%M)") [$(sniper_rating)]"
-#				sniper_variable "$(sniper_installed)"
-#				exit 1
-#			fi
-#  fi
 }
 
-sniper_relapse()
+sniper_install()
 {
-  sniper_trace | head -n 1
-  tput rev
-  sniper_trace | head -n 2 | tail -n 1
-  tput sgr0
-  sniper_trace | tail -n +3
+local version="$1"
+old_lock=$(cat $BLOCK | grep "$1")
+	
+	if [ "$1" == "$old_lock" ]; then
+		echo -e "${RED}This snapshot is locked!${RESET} Do 'sniper unlock $1' if you wish to unlock it."
+	else
+		if [ "$version" != "$(cat $DEFAULT)" ] && [ "$version" == "$(cat $VAR_FILE)" ] ; then
+			echo -e "${GREEN}Already at the ${BLUE}$version${RESET}${GREEN} snapshot.${RESET}"
+			exit 1
+		fi
+
+		if [ "$version" != "$(sniper_installed)" ] && [ "$version" != "stable" ] && [ "$version" != "testing" ] && [ "$version" != "latest" ] && [ "$version" != "$(cat $VAR_FILE)" ] ; then
+			sniper_prompt "${RED}Update from${RESET} ${RED}$(sniper_installed)${RESET}${BLUE} to ${RESET}${GREEN}$version?${RESET}"
+			sniper_sudo
+			sniper_variable $version
+			sniper_dup $version
+				if (( $? )); then
+					sniper_variable $(sniper_installed)
+					exit 1
+				else
+					sniper_trace "$(sniper_installed) $(date +"(%a, %b %d %Y - %H:%M)") [$(sniper_rating)]"
+					sniper_variable "$(sniper_installed)"
+					exit 1
+				fi
+		fi
+	fi
+
+}
+
+sniper_rollback()
+{
+	sniper_trace | head -n 1
+	tput rev
+	sniper_trace | head -n 2 | tail -n 1
+	tput sgr0
+	sniper_trace | tail -n +3
 
 	while $shouldloop; do
-		echo -ne "${BLUE}Choose relapse snapshot, or (C) to cancel. (${RESET}2${BLUE}):${RESET} "
-    local var
-    read var
+		echo -ne "${BLUE}Choose rollback snapshot, or (C) to cancel. (${RESET}2${BLUE}):${RESET} "
+local var
+read var
 
 		if [ "$var" = "c" ] ; then
 			echo "Exit..."
@@ -405,7 +438,7 @@ sniper_relapse()
 			shouldloop=false;
 			echo -ne "Choose the rollover, or (C) to cancel. (${RESET}$var${BLUE}):${RESET} "
 			local version="$(sniper_trace_pop)"
-			local old_def="$(cat $TRACE | head -n $var | tail -n 1 | cut -d "[" -f 2 | cut -d "]" -f 1)"
+			#local old_def="$(cat $TRACE | head -n $var | tail -n 1 | cut -d "[" -f 2 | cut -d "]" -f 1)"
 
 			if [ "$version" == "" ] ; then
 				echo -e "${BLUE}No previous version have been traced${RESET}"
@@ -420,8 +453,9 @@ sniper_relapse()
 			sniper_trace | tail -n +$[var+1]
 			sniper_prompt "${GREEN}Update from${RESET} ${RED}$(sniper_installed)${RESET} ${GREEN} to $version?${RESET}"
 			sniper_sudo
+			sniper_lock $(sniper_installed)
 			sniper_variable "$version"
-			sniper_install $version
+			sniper_dup $version
 
 			if (( $? )); then
 				sniper_variable $(sniper_installed)
@@ -429,45 +463,45 @@ sniper_relapse()
 			else
 				sniper_trace_pop "Indeed"
 				sniper_variable "$(sniper_installed)"
-				echo "$old_def" > $DEFAULT
+				#echo "$old_def" > $DEFAULT
 				exit 1
 			fi
 		else
-      echo -e "${BLUE}Enter a valid response${RESET}";
-    fi
+			echo -e "${BLUE}Enter a valid response${RESET}";
+    		fi
 
-  done
-  shouldloop=true
+	done
 
+shouldloop=true
 }
 
-
-sniper_untarget()
+sniper_shut()
 {
-  if [ ! -d "$REPOS_DIR/.previous" ] ; then
-    echo -e "${BLUE}Nothing to relapse${RESET}"
-    exit 1
-  fi
+	if [ ! -d "$REPOS_DIR/.previous" ] ; then
+		echo -e "${BLUE}Nothing to revert${RESET}"
+		exit 1
+	fi
 
-  local repos=($(ls "$REPOS_DIR/.previous"))
-  sniper_prompt "revert ${#repos[@]} repos?"
+local repos=($(ls "$REPOS_DIR/.previous"))
 
-  sniper_sudo
-  sudo mv "$REPOS_DIR/.previous"/* $REPOS_DIR/
-  sudo rm -r "$REPOS_DIR/.previous"
-  sudo rm "$VAR_FILE"
+	sniper_prompt "revert ${#repos[@]} repos?"
+	sniper_sudo
+	sudo mv "$REPOS_DIR/.previous"/* $REPOS_DIR/
+	sudo rm -r "$REPOS_DIR/.previous"
+	sudo rm "$VAR_FILE"
 }
 
-sniper_install()
+sniper_dup()
 {
-  sudo zypper ref
-  sudo zypper dup -l
+	sudo zypper ref
+	sudo zypper dup -l
 }
+
 
 sniper_usage()
 {
 	tput setaf 6
-  cat <<_EOF_
+	cat <<_EOF_
 
   Usage: sniper [options] command [arguments]
 
@@ -477,17 +511,19 @@ Options:
  -h, --help            Display this message and exit
 
  Commands:
+ start		       Start sniper engine
  report                Show your report information.
  installed|version     Show current installed snapshot.
- target                Target and install updates
- install							 Install specific snapshot
+ target                Target snapshot branch updates
+ install	       Install specific snapshot
  list                  List available snapshots.
  info                  Info about specific snapshot
- trace                 Trace previous snapshots installed.
- update                Switch to and install the latest available snapshot.
- relapse               Install previous snapshot from historic.
- untarget              Revert back to the original tumbleweed repository setup.
-
+ trace                 Trace previous installed snapshots.
+ update                Update to new available snapshot.
+ rollback              Install previous snapshot from historic.
+ shut              Revert back to the original tumbleweed repository setup.
+ lock		       Lock snapshot
+ unlock		       Unlock snapshot
 
 _EOF_
 	tput sgr0
@@ -495,29 +531,32 @@ _EOF_
 
 sniper_handle()
 {
-  case "$1" in
-    --version) echo -e "${BLUE}$VERSION${RESET}" ; exit 0 ; ;;
-    --force) force=1 ; ;;
-    -h|--help) command="usage" ; ;;
-    trace|init|installed|list|relapse|report|untarget|update|info|install)
-      command="$1" ; ;;
-    version)
-      command="installed" ; ;;
-    target)
-      command="$1" ; args_expected=1 ; ;;
-		rating)
-	    command="$1" ; args_expected=1 ;
-	      ;;
-    -*) echo -e "${RED}Unknown option $1${RESET}" ; exit 1 ; ;;
-    *)
-      if [ $args_expected -eq 0 ] ; then
-        return 1
-      fi
-      args+=("$1")
-      ((args_expected--))
-      ;;
-  esac
-  return 0
+	case "$1" in
+		--version) echo -e "${BLUE}$VERSION${RESET}" ; exit 0 ; ;;
+		--force) force=1 ; ;;
+		-h|--help) command="usage" ; ;;
+		trace|start|installed|list|rollback|report|shut|update|info)
+			command="$1" ; ;;
+		version)
+			command="installed" ; ;;
+		target)
+			command="$1" ; args_expected=1 ; ;;
+		install)
+			command="$1" ; args_expected=1 ; ;;
+		lock)
+			command="$1" ; args_expected=1 ; ;;
+		unlock)
+			command="$1" ; args_expected=1 ; ;;
+		-*) echo -e "${RED}Unknown option $1${RESET}" ; exit 1 ; ;;
+		*)
+		if [ $args_expected -eq 0 ] ; then
+			return 1
+		fi
+		args+=("$1")
+		((args_expected--))
+		;;
+	esac
+	return 0
 }
 
 	command="usage"
@@ -527,10 +566,10 @@ sniper_handle()
 			shift
 		done
 
-		if [ "$command" != "usage" ] && [ "$command" != "init" ] && ! sniper_inited ; then
-			echo -e "${RED}Repositories have not been initialized for snapshots${RESET}"
-			echo -e "${BLUE}  Trying $0 init${RESET}"
-			sniper_init
+		if [ "$command" != "usage" ] && [ "$command" != "start" ] && ! sniper_started ; then
+			echo -e "${RED}Repositories have not been started for snapshots${RESET}"
+			echo -e "${BLUE}  Trying $0 start${RESET}"
+			sniper_start
 			exit 1
 		fi
 
@@ -538,5 +577,5 @@ sniper_handle()
 sniper_$command ${args[@]}
 
 	if [ "$install" == "1" ] ; then
-		sniper_install
+		sniper_dup
 	fi
